@@ -53,8 +53,14 @@ namespace MemoryCleanerApp
             InitializeCustomComponents();
             SetupTrayIcon();
             LoadConfiguration();
-            
-            // Primera limpieza automática al iniciar la app
+
+            // Si el inicio automático ya estaba activo, actualiza la ruta registrada
+            // por si el usuario movió la carpeta o el ejecutable de lugar.
+            if (IsTaskScheduled())
+            {
+                UpdateAutoStartTaskPath();
+            }
+
             ExecuteCleanSequence();
         }
 
@@ -66,7 +72,6 @@ namespace MemoryCleanerApp
             this.MaximizeBox = false;
             this.StartPosition = FormStartPosition.CenterScreen;
 
-            // Opción para activar o desactivar el control por Umbral
             chkEnableThreshold = new CheckBox { Text = "Usar umbral de RAM (%):", Location = new Point(20, 20), AutoSize = true, Checked = false };
             chkEnableThreshold.CheckedChanged += delegate(object sender, EventArgs e) 
             { 
@@ -143,8 +148,6 @@ namespace MemoryCleanerApp
         {
             float ramUsage = NativeMemoryOptimizer.GetSystemRamUsagePercentage();
 
-            // Si la casilla del umbral está activada, solo limpia cuando supere el porcentaje.
-            // Si está desactivada, limpia siempre que se cumpla el intervalo de tiempo.
             if (chkEnableThreshold.Checked)
             {
                 if (ramUsage >= (float)numThreshold.Value)
@@ -285,6 +288,26 @@ namespace MemoryCleanerApp
             }
         }
 
+        private void UpdateAutoStartTaskPath()
+        {
+            try
+            {
+                string exePath = Application.ExecutablePath;
+                string cmdArgs = string.Format("/create /tn \"{0}\" /tr \"\\\"{1}\\\"\" /sc onlogon /rl highest /f", TaskName, exePath);
+                
+                ProcessStartInfo psi = new ProcessStartInfo("schtasks", cmdArgs)
+                {
+                    CreateNoWindow = true,
+                    UseShellExecute = false
+                };
+                using (Process p = Process.Start(psi))
+                {
+                    if (p != null) p.WaitForExit();
+                }
+            }
+            catch { }
+        }
+
         private void ToggleAutoStartTask(bool enable)
         {
             try
@@ -294,11 +317,28 @@ namespace MemoryCleanerApp
 
                 if (enable)
                 {
-                    psi = new ProcessStartInfo("schtasks", string.Format("/create /tn \"{0}\" /tr \"\\\"{1}\\\"\" /sc onlogon /rl highest /f", TaskName, exePath))
+                    // Crea/sobrescribe la tarea con la ruta exacta donde se encuentra el .exe actualmente
+                    string cmdArgs = string.Format("/create /tn \"{0}\" /tr \"\\\"{1}\\\"\" /sc onlogon /rl highest /f", TaskName, exePath);
+                    psi = new ProcessStartInfo("schtasks", cmdArgs)
                     {
                         CreateNoWindow = true,
                         UseShellExecute = false
                     };
+                    using (Process p = Process.Start(psi))
+                    {
+                        if (p != null) p.WaitForExit();
+                    }
+
+                    // Fuerza la ejecución inicial desde la tarea programada para verificar que arranca bien
+                    ProcessStartInfo runPsi = new ProcessStartInfo("schtasks", string.Format("/run /tn \"{0}\"", TaskName))
+                    {
+                        CreateNoWindow = true,
+                        UseShellExecute = false
+                    };
+                    using (Process pRun = Process.Start(runPsi))
+                    {
+                        if (pRun != null) pRun.WaitForExit();
+                    }
                 }
                 else
                 {
@@ -307,11 +347,10 @@ namespace MemoryCleanerApp
                         CreateNoWindow = true,
                         UseShellExecute = false
                     };
-                }
-
-                using (Process p = Process.Start(psi))
-                {
-                    if (p != null) p.WaitForExit();
+                    using (Process p = Process.Start(psi))
+                    {
+                        if (p != null) p.WaitForExit();
+                    }
                 }
             }
             catch (Exception ex)
@@ -327,7 +366,7 @@ namespace MemoryCleanerApp
                 WindowsPrincipal principal = new WindowsPrincipal(identity);
                 if (!principal.IsInRole(WindowsBuiltInRole.Administrator))
                 {
-                    MessageBox.Show("Atención: Esta aplicación requiere derechos de Administrador.", "Privilegios Requeridos", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    MessageBox.Show("Atención: Esta aplicación requiere derechos de Administrador para funcionar correctamente.", "Privilegios Requeridos", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 }
             }
         }
