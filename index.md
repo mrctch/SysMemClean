@@ -21,7 +21,7 @@ title: SysMemClean - Smart Windows RAM Optimizer
 
 Get the app from my official Release section:
 
-[👉 Download SysMemClean](https://github.com/mrctch/SysMemClean/releases)
+[👉 Download SysMemClean](https://github.com/mrctch/SysMemClean/releases/download/v1.0.2/SysMemClean.7z)
 
 ---
 
