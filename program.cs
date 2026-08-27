@@ -1,26 +1,41 @@
 using System;
 using System.Diagnostics;
 using System.Drawing;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
+using System.Threading;
 using System.Windows.Forms;
 
 namespace MemoryCleanerApp
 {
     internal static class Program
     {
+        private static Mutex mutex = null;
+
         [STAThread]
         static void Main()
         {
+            bool createdNew;
+            mutex = new Mutex(true, "Global\\SysMemCleanUniqueMutexAppKey", out createdNew);
+
+            if (!createdNew)
+            {
+                return;
+            }
+
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             Application.Run(new Form1());
+
+            GC.KeepAlive(mutex);
         }
     }
 
     public partial class Form1 : Form
     {
         private const string TaskName = "SysMemCleanAutoStart";
+        private string configFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config.ini");
 
         private NotifyIcon notifyIcon;
         private ContextMenuStrip contextMenu;
@@ -36,12 +51,14 @@ namespace MemoryCleanerApp
             CheckAdministratorPrivileges();
             InitializeCustomComponents();
             SetupTrayIcon();
-            NativeMemoryOptimizer.TrimProcessMemory();
+            LoadConfiguration(); // Carga porcentaje e intervalo guardados
+            
+            // Ejecución e inspección inmediata al abrir
+            CheckAndCleanMemory();
         }
 
         private void InitializeCustomComponents()
         {
-            // Nombre en el borde superior de la ventana
             this.Text = "SysMemClean";
             this.Size = new Size(360, 260);
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -50,24 +67,23 @@ namespace MemoryCleanerApp
 
             Label lblThreshold = new Label { Text = "Umbral de RAM (%):", Location = new Point(20, 20), AutoSize = true };
             numThreshold = new NumericUpDown { Location = new Point(180, 18), Width = 130, Minimum = 50, Maximum = 99, Value = 80 };
+            numThreshold.ValueChanged += delegate(object sender, EventArgs e) { SaveConfiguration(); };
 
             Label lblInterval = new Label { Text = "Intervalo (Segundos):", Location = new Point(20, 60), AutoSize = true };
             numInterval = new NumericUpDown { Location = new Point(180, 58), Width = 130, Minimum = 5, Maximum = 3600, Value = 30 };
-            
             numInterval.ValueChanged += delegate(object sender, EventArgs e) 
             { 
                 timerMonitor.Interval = (int)numInterval.Value * 1000; 
+                SaveConfiguration();
             };
 
             chkAutoStart = new CheckBox { Text = "Iniciar con Windows", Location = new Point(20, 100), AutoSize = true, Checked = IsTaskScheduled() };
-            
             chkAutoStart.CheckedChanged += delegate(object sender, EventArgs e) 
             { 
                 ToggleAutoStartTask(chkAutoStart.Checked); 
             };
 
             btnCleanNow = new Button { Text = "Limpiar RAM Ahora", Location = new Point(20, 135), Width = 290, Height = 35, BackColor = Color.LightSteelBlue };
-            
             btnCleanNow.Click += delegate(object sender, EventArgs e) 
             { 
                 ExecuteCleanSequence(); 
@@ -117,6 +133,11 @@ namespace MemoryCleanerApp
 
         private void TimerMonitor_Tick(object sender, EventArgs e)
         {
+            CheckAndCleanMemory();
+        }
+
+        private void CheckAndCleanMemory()
+        {
             float ramUsage = NativeMemoryOptimizer.GetSystemRamUsagePercentage();
             if (ramUsage >= (float)numThreshold.Value)
             {
@@ -124,6 +145,7 @@ namespace MemoryCleanerApp
             }
             else
             {
+                lblStatus.Text = string.Format("RAM Uso: {0}% (En espera)", (int)ramUsage);
                 NativeMemoryOptimizer.TrimProcessMemory();
             }
         }
@@ -144,6 +166,53 @@ namespace MemoryCleanerApp
             {
                 NativeMemoryOptimizer.TrimProcessMemory();
             }
+        }
+
+        private void SaveConfiguration()
+        {
+            try
+            {
+                string[] lines = {
+                    string.Format("Threshold={0}", numThreshold.Value),
+                    string.Format("Interval={0}", numInterval.Value)
+                };
+                File.WriteAllLines(configFile, lines);
+            }
+            catch { }
+        }
+
+        private void LoadConfiguration()
+        {
+            try
+            {
+                if (File.Exists(configFile))
+                {
+                    string[] lines = File.ReadAllLines(configFile);
+                    foreach (string line in lines)
+                    {
+                        string[] parts = line.Split('=');
+                        if (parts.Length == 2)
+                        {
+                            if (parts[0].Trim() == "Threshold")
+                            {
+                                decimal val;
+                                if (decimal.TryParse(parts[1].Trim(), out val) && val >= numThreshold.Minimum && val <= numThreshold.Maximum)
+                                    numThreshold.Value = val;
+                            }
+                            else if (parts[0].Trim() == "Interval")
+                            {
+                                decimal val;
+                                if (decimal.TryParse(parts[1].Trim(), out val) && val >= numInterval.Minimum && val <= numInterval.Maximum)
+                                {
+                                    numInterval.Value = val;
+                                    timerMonitor.Interval = (int)val * 1000;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            catch { }
         }
 
         private void RestoreWindow()
