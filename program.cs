@@ -42,6 +42,7 @@ namespace MemoryCleanerApp
         private System.Windows.Forms.Timer timerMonitor;
         private NumericUpDown numThreshold;
         private NumericUpDown numInterval;
+        private CheckBox chkEnableThreshold;
         private CheckBox chkAutoStart;
         private Button btnCleanNow;
         private Label lblStatus;
@@ -51,26 +52,33 @@ namespace MemoryCleanerApp
             CheckAdministratorPrivileges();
             InitializeCustomComponents();
             SetupTrayIcon();
-            LoadConfiguration(); // Carga porcentaje e intervalo guardados
+            LoadConfiguration();
             
-            // Ejecución e inspección inmediata al abrir
-            CheckAndCleanMemory();
+            // Primera limpieza automática al iniciar la app
+            ExecuteCleanSequence();
         }
 
         private void InitializeCustomComponents()
         {
             this.Text = "SysMemClean";
-            this.Size = new Size(360, 260);
+            this.Size = new Size(360, 290);
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
             this.StartPosition = FormStartPosition.CenterScreen;
 
-            Label lblThreshold = new Label { Text = "Umbral de RAM (%):", Location = new Point(20, 20), AutoSize = true };
-            numThreshold = new NumericUpDown { Location = new Point(180, 18), Width = 130, Minimum = 50, Maximum = 99, Value = 80 };
+            // Opción para activar o desactivar el control por Umbral
+            chkEnableThreshold = new CheckBox { Text = "Usar umbral de RAM (%):", Location = new Point(20, 20), AutoSize = true, Checked = false };
+            chkEnableThreshold.CheckedChanged += delegate(object sender, EventArgs e) 
+            { 
+                numThreshold.Enabled = chkEnableThreshold.Checked;
+                SaveConfiguration(); 
+            };
+
+            numThreshold = new NumericUpDown { Location = new Point(190, 18), Width = 120, Minimum = 50, Maximum = 99, Value = 80, Enabled = false };
             numThreshold.ValueChanged += delegate(object sender, EventArgs e) { SaveConfiguration(); };
 
             Label lblInterval = new Label { Text = "Intervalo (Segundos):", Location = new Point(20, 60), AutoSize = true };
-            numInterval = new NumericUpDown { Location = new Point(180, 58), Width = 130, Minimum = 5, Maximum = 3600, Value = 30 };
+            numInterval = new NumericUpDown { Location = new Point(190, 58), Width = 120, Minimum = 5, Maximum = 3600, Value = 30 };
             numInterval.ValueChanged += delegate(object sender, EventArgs e) 
             { 
                 timerMonitor.Interval = (int)numInterval.Value * 1000; 
@@ -89,9 +97,9 @@ namespace MemoryCleanerApp
                 ExecuteCleanSequence(); 
             };
 
-            lblStatus = new Label { Text = "Estado: En espera", Location = new Point(20, 180), AutoSize = true, ForeColor = Color.Gray };
+            lblStatus = new Label { Text = "Estado: En espera", Location = new Point(20, 185), AutoSize = true, ForeColor = Color.Gray };
 
-            this.Controls.Add(lblThreshold);
+            this.Controls.Add(chkEnableThreshold);
             this.Controls.Add(numThreshold);
             this.Controls.Add(lblInterval);
             this.Controls.Add(numInterval);
@@ -133,20 +141,24 @@ namespace MemoryCleanerApp
 
         private void TimerMonitor_Tick(object sender, EventArgs e)
         {
-            CheckAndCleanMemory();
-        }
-
-        private void CheckAndCleanMemory()
-        {
             float ramUsage = NativeMemoryOptimizer.GetSystemRamUsagePercentage();
-            if (ramUsage >= (float)numThreshold.Value)
+
+            // Si la casilla del umbral está activada, solo limpia cuando supere el porcentaje.
+            // Si está desactivada, limpia siempre que se cumpla el intervalo de tiempo.
+            if (chkEnableThreshold.Checked)
             {
-                ExecuteCleanSequence();
+                if (ramUsage >= (float)numThreshold.Value)
+                {
+                    ExecuteCleanSequence();
+                }
+                else
+                {
+                    lblStatus.Text = string.Format("RAM Uso: {0}% (Por debajo del {1}%)", (int)ramUsage, numThreshold.Value);
+                }
             }
             else
             {
-                lblStatus.Text = string.Format("RAM Uso: {0}% (En espera)", (int)ramUsage);
-                NativeMemoryOptimizer.TrimProcessMemory();
+                ExecuteCleanSequence();
             }
         }
 
@@ -173,6 +185,7 @@ namespace MemoryCleanerApp
             try
             {
                 string[] lines = {
+                    string.Format("UseThreshold={0}", chkEnableThreshold.Checked),
                     string.Format("Threshold={0}", numThreshold.Value),
                     string.Format("Interval={0}", numInterval.Value)
                 };
@@ -193,7 +206,16 @@ namespace MemoryCleanerApp
                         string[] parts = line.Split('=');
                         if (parts.Length == 2)
                         {
-                            if (parts[0].Trim() == "Threshold")
+                            if (parts[0].Trim() == "UseThreshold")
+                            {
+                                bool useThresh;
+                                if (bool.TryParse(parts[1].Trim(), out useThresh))
+                                {
+                                    chkEnableThreshold.Checked = useThresh;
+                                    numThreshold.Enabled = useThresh;
+                                }
+                            }
+                            else if (parts[0].Trim() == "Threshold")
                             {
                                 decimal val;
                                 if (decimal.TryParse(parts[1].Trim(), out val) && val >= numThreshold.Minimum && val <= numThreshold.Maximum)
