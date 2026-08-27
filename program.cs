@@ -54,8 +54,6 @@ namespace MemoryCleanerApp
             SetupTrayIcon();
             LoadConfiguration();
 
-            // Si el inicio automático ya estaba activo, actualiza la ruta registrada
-            // por si el usuario movió la carpeta o el ejecutable de lugar.
             if (IsTaskScheduled())
             {
                 UpdateAutoStartTaskPath();
@@ -169,9 +167,9 @@ namespace MemoryCleanerApp
         {
             try
             {
-                NativeMemoryOptimizer.CleanAllSystemMemory();
+                NativeMemoryOptimizer.CleanSelectiveSystemMemory();
                 lblStatus.Text = string.Format("Última limpieza: {0:HH:mm:ss}", DateTime.Now);
-                notifyIcon.ShowBalloonTip(2000, "SysMemClean", "Se han limpiado las listas de trabajo y standby de Windows.", ToolTipIcon.Info);
+                notifyIcon.ShowBalloonTip(2000, "SysMemClean", "Memoria purgada (aplicación activa protegida).", ToolTipIcon.Info);
             }
             catch (Exception ex)
             {
@@ -317,7 +315,6 @@ namespace MemoryCleanerApp
 
                 if (enable)
                 {
-                    // Crea/sobrescribe la tarea con la ruta exacta donde se encuentra el .exe actualmente
                     string cmdArgs = string.Format("/create /tn \"{0}\" /tr \"\\\"{1}\\\"\" /sc onlogon /rl highest /f", TaskName, exePath);
                     psi = new ProcessStartInfo("schtasks", cmdArgs)
                     {
@@ -329,7 +326,6 @@ namespace MemoryCleanerApp
                         if (p != null) p.WaitForExit();
                     }
 
-                    // Fuerza la ejecución inicial desde la tarea programada para verificar que arranca bien
                     ProcessStartInfo runPsi = new ProcessStartInfo("schtasks", string.Format("/run /tn \"{0}\"", TaskName))
                     {
                         CreateNoWindow = true,
@@ -374,6 +370,12 @@ namespace MemoryCleanerApp
 
     public static class NativeMemoryOptimizer
     {
+        [DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
+
+        [DllImport("user32.dll")]
+        private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
         [DllImport("ntdll.dll", SetLastError = true)]
         private static extern int NtSetSystemInformation(int SystemInformationClass, ref int SystemInformation, int SystemInformationLength);
 
@@ -440,12 +442,33 @@ namespace MemoryCleanerApp
             return 0;
         }
 
-        public static void CleanAllSystemMemory()
+        public static void CleanSelectiveSystemMemory()
         {
             EnablePrivilege("SeIncreaseQuotaPrivilege");
             EnablePrivilege("SeProfileSingleProcessPrivilege");
 
-            ExecuteCommand(MemoryListCommand.EmptyWorkingSets);
+            // 1. Vaciado selective de los Working Sets de aplicaciones en segundo plano
+            uint activeProcessId = GetActiveProcessId();
+            int currentAppId = Process.GetCurrentProcess().Id;
+
+            Process[] processes = Process.GetProcesses();
+            foreach (Process proc in processes)
+            {
+                try
+                {
+                    // No toca la aplicación activa, la propia app de limpieza, ni procesos de sistema indispensables
+                    if (proc.Id != activeProcessId && proc.Id != currentAppId && proc.Id != 0 && proc.Id != 4)
+                    {
+                        EmptyWorkingSet(proc.Handle);
+                    }
+                }
+                catch
+                {
+                    // Algunos procesos protegidos de sistema denegarán el acceso, lo cual es normal.
+                }
+            }
+
+            // 2. Limpieza profunda de memoria Standby y System Working Sets
             ExecuteCommand(MemoryListCommand.EmptySystemWorkingSet);
             ExecuteCommand(MemoryListCommand.EmptyModifiedPageList);
             ExecuteCommand(MemoryListCommand.EmptyStandbyList);
@@ -458,6 +481,16 @@ namespace MemoryCleanerApp
             GC.WaitForPendingFinalizers();
             GC.Collect(2, GCCollectionMode.Forced, true);
             EmptyWorkingSet(Process.GetCurrentProcess().Handle);
+        }
+
+        private static uint GetActiveProcessId()
+        {
+            IntPtr hwnd = GetForegroundWindow();
+            if (hwnd == IntPtr.Zero) return 0;
+
+            uint processId;
+            GetWindowThreadProcessId(hwnd, out processId);
+            return processId;
         }
 
         private static void ExecuteCommand(MemoryListCommand command)
