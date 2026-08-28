@@ -30,4 +30,4 @@ OS: Windows 7 / 8 / 10 / 11 (64-bit recommended)
 Framework: .NET Framework 4.0 or higher (pre-installed on modern Windows versions)
 
 Author
-Developed by marco_tch.
+Developed by mrctch.
